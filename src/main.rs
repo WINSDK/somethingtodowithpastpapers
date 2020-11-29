@@ -4,7 +4,7 @@ use std::fs;
 use std::io::prelude::*;
 
 pub fn read_papers(dir: &str) -> Vec<Vec<String>> {
-    let mut papers: Vec<Vec<String>> = Default::default();
+    let mut papers: Vec<Vec<String>> = Default::default(); // outer: papers, inner: pages
 
     let documents: Vec<String> = fs::read_dir(dir)
         .map(|f| {
