@@ -1,6 +1,7 @@
 use lopdf::Document;
 use regex::Regex;
 use std::fs;
+use std::io::copy;
 use std::io::prelude::*;
 
 pub fn read_papers(dir: &str) -> Vec<Vec<String>> {
@@ -41,8 +42,10 @@ pub fn read_papers(dir: &str) -> Vec<Vec<String>> {
 }
 
 async fn pull_papers_cambridge() -> Result<(), reqwest::Error> {
+    const BASE: &str = "https://papacambridge.com/a-and-as-level-subjects/";
+
     let subjects: Vec<String> = {
-        let response = reqwest::get("https://papacambridge.com/a-and-as-level-subjects/").await?;
+        let response = reqwest::get(BASE).await?;
 
         if response.status() != 200 {
             println!("Failed GET request, status: {}", response.status());
@@ -76,7 +79,74 @@ async fn pull_papers_cambridge() -> Result<(), reqwest::Error> {
                 .collect()
         };
         log.write(papers.join("\n").as_bytes()).unwrap();
+
         for paper in papers {
+            let response = reqwest::get(&paper[..]).await?;
+
+            println!("{}", paper);
+
+            if response.status() != 200 {
+                println!(
+                    "Failed GET request, status: {}, origin: {}",
+                    response.status(),
+                    paper
+                );
+            }
+
+            let re = Regex::new("folder\\.png.*?class=.headingwrap.").unwrap();
+            let body = response.text().await?;
+
+            // Check if page includes folders, if so visits subsites
+            if let Some(_) = re.captures(body.as_ref()) {
+                let re = Regex::new("(.{9}?)\" class=.clearfix.").unwrap();
+
+                for subsite in re.captures_iter(body.as_ref()) {
+                    let subsite = [&paper[..], &subsite[1]].concat();
+                    let response = reqwest::get(&subsite[..]).await?;
+
+                    println!("{}", subsite);
+
+                    if response.status() != 200 {
+                        println!(
+                            "Failed GET request, status: {}, origin: {}",
+                            response.status(),
+                            subsite
+                        );
+                    }
+
+                    let re = Regex::new("href=\"\\.\\./\\.\\./(.*?((upload/).*?))\">Download</a>")
+                        .unwrap();
+                    println!("Reached regex for the download!");
+
+                    for file in re.captures_iter(response.text().await?.as_ref()) {
+                        let extension = [&file[1], &file[3], &file[2]].concat();
+                        let file_path = [BASE, &extension[..]].concat();
+                        let response = reqwest::get(&file_path[..]).await?;
+
+                        if response.status() != 200 {
+                            println!(
+                                "Failed GET request, status: {}, origin: {}",
+                                response.status(),
+                                extension
+                            );
+                        }
+
+                        let local_file_name = ["data/", &file[2]].concat();
+                        let content = response.text().await?;
+                        let mut destination = fs::File::create(&local_file_name[..])
+                            .expect("Failed to create file in data dir...");
+
+                        copy(&mut content.as_bytes(), &mut destination)
+                            .expect("Failed to write to file in data dir...");
+                    }
+                }
+            } else {
+                // TODO: Must replicate the functionality added within subsites, currently it will
+                // only download past papers if they're categorized into two or more exams per
+                // year, if cambridge released only one set of exams that year for a subject it
+                // will ignore the paper.
+                unimplemented!();
+            };
         }
     }
 
@@ -85,10 +155,9 @@ async fn pull_papers_cambridge() -> Result<(), reqwest::Error> {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    match fs::create_dir("data") {
-        Err(_) => (),
-        _ => (),
-    };
+    fs::create_dir("data")
+        .map_err(|e| println!("Failed to create \"data\" folder: {}", e))
+        .unwrap();
     let _papers = read_papers("data");
 
     //for paper in _papers {
